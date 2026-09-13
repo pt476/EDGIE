@@ -1,8 +1,14 @@
 clear
-addpath 'XXX\EDGIE\Functions_github'
-addpath 'XXX\EDGIE\InputFiles_github'
-baseDir = 'XXX\EDGIE\ComStock';
 
+%% Add function paths
+[currentDir, ~, ~] = fileparts(mfilename('fullpath'));
+functionsPath = fullfile(currentDir, 'Functions_github');
+inputFilesPath = fullfile(currentDir, 'InputFiles_github');
+baseDir = fullfile(currentDir, 'ComStock');
+
+addpath(functionsPath);
+addpath(inputFilesPath);
+%%
 tic
 batteryDeg =   1; % battery degradation with outside temperature is implemented
 waterheater = 3;  % set 1 for resitance 2 for heat pump only 3 for hybrid
