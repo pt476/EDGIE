@@ -104,7 +104,7 @@ for idx = 1:size(stateFolders, 1)
     % Extract city names for state_id = 'AZ'
     arizonacities = stateAZ.city_ascii;
     USAstateName = stateAZ.state_name;
-    USAcountyNAme = stateAZ.county_name; 
+    USAcountyName = stateAZ.county_name; 
     USAstatelat = stateAZ.lat;
     USAstatelng = stateAZ.lng;
     coolingtemp = stateAZ.x1__CoolingTemp___F_;
@@ -137,7 +137,7 @@ for idx = 1:size(stateFolders, 1)
     CommercialPrice = stateAZ.Commercial;
     ResidentialPrice = stateAZ.Residential;
     
-    TodaysHeadroom = round(trirnd(1.15, 1.36, length(USAcountyNAme), 1), 2);
+    TodaysHeadroom = round(trirnd(1.15, 1.36, length(USAcountyName), 1), 2);
     FutureHeadroom = 1.2;
     
     houseElecWH = stateAZ.ElectricWH_;
@@ -173,7 +173,7 @@ for idx = 1:size(stateFolders, 1)
     for stateIdx = 27 %1:length(arizonacities)
         cityName = arizonacities{stateIdx};
         stateName = USAstateName{stateIdx};
-        countyName = USAcountyNAme{stateIdx};
+        countyName = USAcountyName{stateIdx};
         
         if oneWayCommuteTime(stateIdx) < 24
             commuteSpeed = trirnd(15,35,1,1);
