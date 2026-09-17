@@ -27,14 +27,11 @@ dt = 1;               % time step, h
 K = tf / dt;          % number of time steps
 t = (0:dt:tf)';       % time vector, hours
 FutureHeadroom = 1.2; % Future headroom allowance multiplier 
-
-data = readtable('metaData.xlsx');            % Read the CSV file
-waterfile    = 'DHWEventGeneratorOutput.csv'; % load water scheduler file
 rng(1)
 
 states = {
  'MN','Minnesota'
-%  'DC','District_of_Columbia'
+ 'DC','District_of_Columbia'
 %  'AZ','Arizona'
 %  'AL','Alabama'
 %  'WI','Wisconsin'
@@ -84,13 +81,18 @@ states = {
 %  'IA','Iowa'
  };
 
+%% Read data
+
+metaData = readtable('metaData.xlsx');            % Read the CSV file
+waterfile    = 'DHWEventGeneratorOutput.csv'; % load water scheduler file
+
 stateFolders = cell(size(states,1),2);
 for i = 1:size(states,1)
     stateFolders{i,1} = states{i,1};
     stateFolders{i,2} = fullfile(baseDir,'weather_data',states{i,2},filesep);
 end
 
-% % extract and retime aggregate power data
+% Extract and retime aggregate power data
 fileName = 'cleanedMFREDdata.xlsx';  
 
 opts = detectImportOptions(fileName);
@@ -119,7 +121,7 @@ for stateIdx = 1:size(stateFolders, 1)
     outputFolder = stateFolders{stateIdx, 2};
     
     %% Filter current iteration city data from metaData
-    currentStateData = data(strcmpi(data.state_id, stateAbbr), :);
+    currentStateData = metaData(strcmpi(metaData.state_id, stateAbbr), :);
     
     %% Extract each data column for current city from metaData
     PeakRatio_comStock_resStock = currentStateData.PeakRatio;
@@ -165,7 +167,7 @@ for stateIdx = 1:size(stateFolders, 1)
     data = cell(length(USAcityName), 2);
 
     %% City-level loop
-    for cityIdx = 2 %1:length(USAcityName)
+    for cityIdx = 27 %1:min(3,length(USAcityName)) %1:length(USAcityName)
         cityName = USAcityName{cityIdx};
         stateName = USAstateName{cityIdx};
         countyName = USAcountyName{cityIdx};
@@ -187,8 +189,7 @@ for stateIdx = 1:size(stateFolders, 1)
         AreaDetached = ft2m2.*DetachedFloorArea(cityIdx);
         
         [RvalueDetached,RvalueAttached,floorAreaDetached,floorAreaAttached] = Rcalc(Uwall,Uwindow,AreaDetached,AreaAttached,n1);
-        
-        
+
         homeWithElectricWH = houseElecWH(cityIdx);
         percentageSedans = sedans(cityIdx);
         percentageAttached = AttachedHome(cityIdx);
@@ -615,14 +616,11 @@ for stateIdx = 1:size(stateFolders, 1)
             data{cityIdx,15} = (max(0,960*upgradeReqMW*s/n1));
         end
 
+        %%
         data{cityIdx,16} = zone;
-        
         data{cityIdx,17} = housingUnits*data{cityIdx,15};
-        
         data{cityIdx,18}= housingUnits;
         data{cityIdx,19}= selectedHeadroom;
-        
-        %%
         data{cityIdx,20}= max(winterPeakComStock_todays/s,summerPeakComStock_todays/s);
         data{cityIdx,21}= quantile(pWorkWinter_future+sum(atWork.*pwBaseWinter,2),0.99)/s;
         data{cityIdx,22}= quantile(pWorkSummer_future+sum(atWork.*pwBaseSummer,2),0.99)/s;
@@ -656,7 +654,7 @@ for stateIdx = 1:size(stateFolders, 1)
     % Convert the cell array to a table
     dataTable = cell2table(data(1:end, :), 'VariableNames', headers(1, :));
     
-    % Create a folder named 'combinedData' if it doesn't exist
+    % Create a folder named 'Final' if it doesn't exist
     folderName = 'Final';
     if ~exist(folderName, 'dir')
         mkdir(folderName);
@@ -665,7 +663,7 @@ for stateIdx = 1:size(stateFolders, 1)
     % Specify the file path including the folder
     filePath = fullfile(folderName, sprintf('%s.xlsx', stateName));
     
-    % Save the table to an Excel file in the 'combinedData' folder
+    % Save the table to an Excel file in the 'Final' folder
     writetable(dataTable, filePath);
     toc
 
