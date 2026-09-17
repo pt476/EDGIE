@@ -13,9 +13,20 @@ commercial_data_dir_future   = fullfile(baseDir,'future_merged_results');
 commercial_data_dir_baseline = fullfile(baseDir,'baseline_merged_results');
 %% Define parameters
 tic
-batteryDeg =   1; % battery degradation with outside temperature is implemented
-waterheater = 3;  % set 1 for resitance 2 for heat pump only 3 for hybrid
-sizing = 3;       % set 1 for cooling 2 for heating 3 for max of heating or cooling 
+batteryDeg =   1;     % battery degradation with outside temperature is implemented
+waterheater = 3;      % set 1 for resistance 2 for heat pump only 3 for hybrid
+sizing = 3;           % set 1 for cooling 2 for heating 3 for max of heating or cooling 
+warmupDays=2;         % set number of warmup days
+nDays =7+warmupDays;  % total model week length
+ti = 0;               % initial time, h
+n1 = 1000;            % number of homes (= number of HPs)
+L = n1;               % number of water heater
+ft2m2 = 0.092903;     % ft^2 to m^2 conversion
+tf = (nDays ) * 24;   % total hours
+dt = 1;               % time step, h
+K = tf / dt;          % number of time steps
+t = (0:dt:tf)';       % time vector, hours
+FutureHeadroom = 1.2; % Future headroom allowance multiplier 
 
 data = readtable('metaData.xlsx');            % Read the CSV file
 waterfile    = 'DHWEventGeneratorOutput.csv'; % load water scheduler file
@@ -79,150 +90,130 @@ for i = 1:size(states,1)
     stateFolders{i,2} = fullfile(baseDir,'weather_data',states{i,2},filesep);
 end
 
+% % extract and retime aggregate power data
+fileName = 'cleanedMFREDdata.xlsx';  
+
+opts = detectImportOptions(fileName);
+opts.PreserveVariableNames = 1;
+rawData = readtable(fileName,opts);
+
+powerTime = rawData{:,1};   % time stamp
+weatherTime = (datetime(2018,1,1,0,0,0)-warmupDays:hours(dt):datetime(2019,1,1,0,0,0))';
+
+powerTime.Year=2018;
+
+powerTime = powerTime - hours(5);     % convert UTC to eastern
+Power = rawData{:,2:end};             % individual power profiles
+Power = fillmissing(Power, 'linear'); % Or 'constant', 0
+individualPower = timetable(powerTime,Power);
+individualPower = retime(individualPower,weatherTime);
+Datafilling = individualPower{individualPower.powerTime >= datetime(2018,1,1) & ...
+    individualPower.powerTime < datetime(2018,1,1)+warmupDays, :};
+idx2017 = individualPower.powerTime < datetime(2018,1,1);
+individualPower{idx2017,:} = Datafilling;
+individualPower = fillmissing(individualPower,'linear');
                            
 %% State-level loop
-for idx = 1:size(stateFolders, 1)
-    stateAbbr = stateFolders{idx, 1};
-    outputFolder = stateFolders{idx, 2};
+for stateIdx = 1:size(stateFolders, 1)
+    stateAbbr = stateFolders{stateIdx, 1};
+    outputFolder = stateFolders{stateIdx, 2};
     
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %%%%%%%%%%%%%%%%%%%%%%% input data %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
-    warmupDays=2;
-    nDays =7+warmupDays;
-    ti = 0;              % initial time, h
-    n1 = 1000;           % number of homes (= number of HPs)
-    L = n1;              % number of water heater
-    ft2m2 = 0.092903;
-    tf = (nDays ) * 24;  % total hours
-    dt = 1;                      % time step, h
-    K = tf / dt;         % number of time steps
-    t = (0:dt:tf)';      % time vector, hours
+    %% Filter current iteration city data from metaData
+    currentStateData = data(strcmpi(data.state_id, stateAbbr), :);
     
-    
-    
-    % Filter cities for state_id = 'AZ'
-    stateAZ = data(strcmpi(data.state_id, stateAbbr), :);
-    
-    % Extract city names for state_id = 'AZ'
-    arizonacities = stateAZ.city_ascii;
-    USAstateName = stateAZ.state_name;
-    USAcountyName = stateAZ.county_name; 
-    USAstatelat = stateAZ.lat;
-    USAstatelng = stateAZ.lng;
-    coolingtemp = stateAZ.x1__CoolingTemp___F_;
-    heatingtemp = stateAZ.x99__HeatingTemp___F_;
-    
-    oneWayCommuteTime = stateAZ.MeanCommutingTime ;
-    
-    UvalueWall = stateAZ.Uwall;
-    UvalueWindow = stateAZ.Uwindow;
-    AttachedHome = stateAZ.AttachedHome_;
-    DetachedHome = stateAZ.DetachedHome_;
-    zeroCarinHome = stateAZ.x0Vehicle/100;
-    oneCarinHome = stateAZ.x1Vehicle/100;
-    twoCarinHome = stateAZ.x2Vehicle/100;
-    threeCarinHome = stateAZ.x3_Vehicle/100;
-    DetachedFloorArea = stateAZ.DetachedFloorArea;
-    AttachedFloorArea = stateAZ.AttachedFloorArea;
-    
-    PeakRatio_comStock_resStock = stateAZ.PeakRatio;
-    
+    %% Extract each data column for current city from metaData
+    PeakRatio_comStock_resStock = currentStateData.PeakRatio;
+    AttachedHome = currentStateData.AttachedHome_;
+    DetachedHome = currentStateData.DetachedHome_;
+    USAcityName = currentStateData.city_ascii; 
+    USAstateName = currentStateData.state_name;
+    USAcountyName = currentStateData.county_name; 
+    USAstatelat = currentStateData.lat;   
+    USAstatelng = currentStateData.lng;
+    coolingtemp = currentStateData.x1__CoolingTemp___F_; 
+    heatingtemp = currentStateData.x99__HeatingTemp___F_;  
+    UvalueWall = currentStateData.Uwall;
+    UvalueWindow = currentStateData.Uwindow;
+    DetachedFloorArea = currentStateData.DetachedFloorArea;
+    AttachedFloorArea = currentStateData.AttachedFloorArea;
+    houseElecWH = currentStateData.ElectricWH_;
+    sedans = currentStateData.Cars_;
+    zeroCarinHome = currentStateData.x0Vehicle/100;
+    oneCarinHome = currentStateData.x1Vehicle/100;
+    twoCarinHome = currentStateData.x2Vehicle/100;
+    threeCarinHome = currentStateData.x3_Vehicle/100;
+    oneWayCommuteTime = currentStateData.MeanCommutingTime ;
+    unitsratio = currentStateData.Units;
+    ResidentialPrice = currentStateData.Residential;
+    CommercialPrice = currentStateData.Commercial;
+   
+    %% Clean floor area data
+    % Replace NaN values with 0
     DetachedFloorArea(isnan(DetachedFloorArea))=0;
     AttachedFloorArea(isnan(AttachedFloorArea))=0;
-    
-    DetachedFloorArea(DetachedFloorArea>3000)=3000;
+    % Cap detached floor area to [1000,3000] sqft
+    DetachedFloorArea(DetachedFloorArea>3000)=3000; 
     DetachedFloorArea(DetachedFloorArea<1000)=1000;
-    
+    % Cap attached floor area to [450,1700] sqft
     AttachedFloorArea(AttachedFloorArea>1700)=1700;
     AttachedFloorArea(AttachedFloorArea<450)=450;
-    unitsratio = stateAZ.Units;
-    CommercialPrice = stateAZ.Commercial;
-    ResidentialPrice = stateAZ.Residential;
     
     TodaysHeadroom = round(trirnd(1.15, 1.36, length(USAcountyName), 1), 2);
-    FutureHeadroom = 1.2;
-    
-    houseElecWH = stateAZ.ElectricWH_;
-    
-    sedans = stateAZ.Cars_;
+
     desiredState = USAstateName(1,1);
     
-    data = cell(length(arizonacities), 2);
-    
-    fileName = 'cleanedMFREDdata.xlsx';  
-    
-    opts = detectImportOptions(fileName);
-    opts.PreserveVariableNames = 1;
-    rawData = readtable(fileName,opts);
-    
-    % % extract and retime aggregate power data
-    powerTime = rawData{:,1};   % time stamp
-    weatherTime = (datetime(2018,1,1,0,0,0)-warmupDays:hours(dt):datetime(2019,1,1,0,0,0))';
-     
-    powerTime.Year=2018;
-    
-    powerTime = powerTime - hours(5);     % convert UTC to eastern
-    Power = rawData{:,2:end};             % individual power profiles
-    Power = fillmissing(Power, 'linear'); % Or 'constant', 0
-    individualPower = timetable(powerTime,Power);
-    individualPower = retime(individualPower,weatherTime);
-    Datafilling = individualPower{individualPower.powerTime >= datetime(2018,1,1) & ...
-                                   individualPower.powerTime < datetime(2018,1,1)+warmupDays, :};
-    idx2017 = individualPower.powerTime < datetime(2018,1,1);
-    individualPower{idx2017,:} = Datafilling;
-    individualPower = fillmissing(individualPower,'linear');
-    
+    data = cell(length(USAcityName), 2);
+
     %% City-level loop
-    for stateIdx = 27 %1:length(arizonacities)
-        cityName = arizonacities{stateIdx};
-        stateName = USAstateName{stateIdx};
-        countyName = USAcountyName{stateIdx};
+    for cityIdx = 2 %1:length(USAcityName)
+        cityName = USAcityName{cityIdx};
+        stateName = USAstateName{cityIdx};
+        countyName = USAcountyName{cityIdx};
         
-        if oneWayCommuteTime(stateIdx) < 24
+        if oneWayCommuteTime(cityIdx) < 24
             commuteSpeed = trirnd(15,35,1,1);
         else
             commuteSpeed = trirnd(40,60,1,1);
         end
         
-        commuteDistance = (oneWayCommuteTime(stateIdx))*commuteSpeed/60;
+        commuteDistance = (oneWayCommuteTime(cityIdx))*commuteSpeed/60;
         
-        lat = USAstatelat(stateIdx);
-        lng = USAstatelng(stateIdx);
-        Uwall = UvalueWall(stateIdx);
-        Uwindow = UvalueWindow(stateIdx);
+        lat = USAstatelat(cityIdx);
+        lng = USAstatelng(cityIdx);
+        Uwall = UvalueWall(cityIdx);
+        Uwindow = UvalueWindow(cityIdx);
         
-        AreaAttached = ft2m2.*AttachedFloorArea(stateIdx);
-        AreaDetached = ft2m2.*DetachedFloorArea(stateIdx);
+        AreaAttached = ft2m2.*AttachedFloorArea(cityIdx);
+        AreaDetached = ft2m2.*DetachedFloorArea(cityIdx);
         
         [RvalueDetached,RvalueAttached,floorAreaDetached,floorAreaAttached] = Rcalc(Uwall,Uwindow,AreaDetached,AreaAttached,n1);
         
         
-        homeWithElectricWH = houseElecWH(stateIdx);
-        percentageSedans = sedans(stateIdx);
-        percentageAttached = AttachedHome(stateIdx);
-        percentageDetached = DetachedHome(stateIdx);
+        homeWithElectricWH = houseElecWH(cityIdx);
+        percentageSedans = sedans(cityIdx);
+        percentageAttached = AttachedHome(cityIdx);
+        percentageDetached = DetachedHome(cityIdx);
         
-        n2_0vehicle = zeroCarinHome(stateIdx);
-        n2_1vehicle = oneCarinHome(stateIdx);
-        n2_2vehicle = twoCarinHome(stateIdx);
-        n2_3vehicle = threeCarinHome(stateIdx);
+        n2_0vehicle = zeroCarinHome(cityIdx);
+        n2_1vehicle = oneCarinHome(cityIdx);
+        n2_2vehicle = twoCarinHome(cityIdx);
+        n2_3vehicle = threeCarinHome(cityIdx);
         
-        units_per_building = unitsratio(stateIdx);
-        PeakRatio = PeakRatio_comStock_resStock(stateIdx);
+        units_per_building = unitsratio(cityIdx);
+        PeakRatio = PeakRatio_comStock_resStock(cityIdx);
         
-        EnergyCommercial = CommercialPrice(stateIdx)/100;
-        EnergyResidential = ResidentialPrice(stateIdx)/100;
+        EnergyCommercial = CommercialPrice(cityIdx)/100;
+        EnergyResidential = ResidentialPrice(cityIdx)/100;
         
-        selectedHeadroom = TodaysHeadroom(stateIdx);
+        selectedHeadroom = TodaysHeadroom(cityIdx);
         
-        houseHPdetached = stateAZ.HP_Detached(stateIdx);
-        houseAuxdetached = stateAZ.Aux_Detached(stateIdx);
+        houseHPdetached = currentStateData.HP_Detached(cityIdx);
+        houseAuxdetached = currentStateData.Aux_Detached(cityIdx);
         
-        houseHPattached = stateAZ.HP_Attached(stateIdx);
-        houseAuxattached = stateAZ.Aux_Attached(stateIdx);
-        housingUnits = stateAZ.HousingUnits(stateIdx);
-        zone = stateAZ.Zone(stateIdx);
+        houseHPattached = currentStateData.HP_Attached(cityIdx);
+        houseAuxattached = currentStateData.Aux_Attached(cityIdx);
+        housingUnits = currentStateData.HousingUnits(cityIdx);
+        zone = currentStateData.Zone(cityIdx);
            
         % Replace spaces with underscores in the city name
         countyName = strrep(countyName, ' ','_');
@@ -232,27 +223,23 @@ for idx = 1:size(stateFolders, 1)
         
         % Check if the file exists before attempting to import weather data
         if exist(weatherfileName, 'file') == 2         
-            data{stateIdx,1} =  stateName;
-            data{stateIdx, 2} = countyName;
-            data{stateIdx, 3} = cityName;
-            data{stateIdx, 4} = lat;
-            data{stateIdx,5} = lng;
-            data{stateIdx, 6} = mean(RvalueDetached);
-            data{stateIdx, 7} = mean(RvalueAttached);
+            data{cityIdx,1} =  stateName;
+            data{cityIdx, 2} = countyName;
+            data{cityIdx, 3} = cityName;
+            data{cityIdx, 4} = lat;
+            data{cityIdx,5} = lng;
+            data{cityIdx, 6} = mean(RvalueDetached);
+            data{cityIdx, 7} = mean(RvalueAttached);
         else
             % File doesn't exist, skip processing and move to the next city
             fprintf('File not found for %s\n', cityName);
             continue; % Skip to the next iteration
         end
-        
-        
-        
-        
+
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %%%%%%%%%%%%% download weather & basline load data %%%%%%%%%%%%%%%%%%%%%%%%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        
-        
+
         % Import weather data
         [thetaFull, solarFull] = importW(weatherfileName, weatherTime);
         %weatherTime = (datetime(2018,1,1,0,0,0):hours(1):datetime(2019,1,1,0,0,0))';
@@ -286,12 +273,12 @@ for idx = 1:size(stateFolders, 1)
         weekely_min_temperature = min(weekly_temperature_matrix, [], 2);
         weekely_max_temperature = max(weekly_temperature_matrix, [], 2);
         
-        data{stateIdx,8}=heatingtemp(stateIdx);
-        data{stateIdx,9}=coolingtemp(stateIdx);
+        data{cityIdx,8}=heatingtemp(cityIdx);
+        data{cityIdx,9}=coolingtemp(cityIdx);
         
         % Design temperature 
-        design_temperatureWinter = f2c(heatingtemp(stateIdx)); 
-        design_temperatureSummer = f2c(coolingtemp(stateIdx)); 
+        design_temperatureWinter = f2c(heatingtemp(cityIdx)); 
+        design_temperatureSummer = f2c(coolingtemp(cityIdx)); 
 
         % Find five days with daily minimum temperatures closest to the design temperature
         [sortedTemp, sorted_indices] = sort(abs(weekely_min_temperature - design_temperatureWinter));
@@ -562,12 +549,12 @@ for idx = 1:size(stateFolders, 1)
         
         %% data compile
         
-        data{stateIdx, 10}=max(summerPeak/s,winterPeak/s);
-        data{stateIdx, 11}=quantile(Pwinter/s + HPWHloadWinter/s + sum(phBaseWinter,2)/s + HPloadWinter/s,0.99);
-        data{stateIdx, 12}=quantile(Psummer/s + HPWHloadSummer/s + sum(phBaseSummer,2)/s + HPloadSummer/s,0.99);
+        data{cityIdx, 10}=max(summerPeak/s,winterPeak/s);
+        data{cityIdx, 11}=quantile(Pwinter/s + HPWHloadWinter/s + sum(phBaseWinter,2)/s + HPloadWinter/s,0.99);
+        data{cityIdx, 12}=quantile(Psummer/s + HPWHloadSummer/s + sum(phBaseSummer,2)/s + HPloadSummer/s,0.99);
         
-        data{stateIdx, 13}=-data{stateIdx, 12}+data{stateIdx, 11};
-        data{stateIdx,14} = selectedHeadroom*data{stateIdx, 10} - FutureHeadroom*max(data{stateIdx, 11},data{stateIdx, 12});
+        data{cityIdx, 13}=-data{cityIdx, 12}+data{cityIdx, 11};
+        data{cityIdx,14} = selectedHeadroom*data{cityIdx, 10} - FutureHeadroom*max(data{cityIdx, 11},data{cityIdx, 12});
         
         %%  
         resModelPeakWinter = quantile(Pwinter + HPWHloadWinter + sum(phBaseWinter,2) + HPloadWinter,0.99); 
@@ -620,35 +607,35 @@ for idx = 1:size(stateFolders, 1)
         pWorkSummer_future=pWorkSummer_future(warmupSteps+1:end,:);
         
         %%
-        upgradeReqMW = ( FutureHeadroom*max(data{stateIdx, 11},data{stateIdx, 12}) - selectedHeadroom*data{stateIdx, 10});
+        upgradeReqMW = ( FutureHeadroom*max(data{cityIdx, 11},data{cityIdx, 12}) - selectedHeadroom*data{cityIdx, 10});
         
         if (upgradeReqMW <= 0)
-            data{stateIdx,15} =  0;
+            data{cityIdx,15} =  0;
         else
-            data{stateIdx,15} = (max(0,960*upgradeReqMW*s/n1));
+            data{cityIdx,15} = (max(0,960*upgradeReqMW*s/n1));
         end
 
-        data{stateIdx,16} = zone;
+        data{cityIdx,16} = zone;
         
-        data{stateIdx,17} = housingUnits*data{stateIdx,15};
+        data{cityIdx,17} = housingUnits*data{cityIdx,15};
         
-        data{stateIdx,18}= housingUnits;
-        data{stateIdx,19}= selectedHeadroom;
+        data{cityIdx,18}= housingUnits;
+        data{cityIdx,19}= selectedHeadroom;
         
         %%
-        data{stateIdx,20}= max(winterPeakComStock_todays/s,summerPeakComStock_todays/s);
-        data{stateIdx,21}= quantile(pWorkWinter_future+sum(atWork.*pwBaseWinter,2),0.99)/s;
-        data{stateIdx,22}= quantile(pWorkSummer_future+sum(atWork.*pwBaseSummer,2),0.99)/s;
+        data{cityIdx,20}= max(winterPeakComStock_todays/s,summerPeakComStock_todays/s);
+        data{cityIdx,21}= quantile(pWorkWinter_future+sum(atWork.*pwBaseWinter,2),0.99)/s;
+        data{cityIdx,22}= quantile(pWorkSummer_future+sum(atWork.*pwBaseSummer,2),0.99)/s;
         
-        upgradeReqMWCommercial = ( FutureHeadroom*max(data{stateIdx, 21},data{stateIdx, 22}) - selectedHeadroom*data{stateIdx, 20});
-        data{stateIdx,23}=upgradeReqMWCommercial;
+        upgradeReqMWCommercial = ( FutureHeadroom*max(data{cityIdx, 21},data{cityIdx, 22}) - selectedHeadroom*data{cityIdx, 20});
+        data{cityIdx,23}=upgradeReqMWCommercial;
         
         if (upgradeReqMWCommercial <= 0)
-        data{stateIdx,24} =  0;
+        data{cityIdx,24} =  0;
         else
-        data{stateIdx,24} = (max(0,960*upgradeReqMWCommercial*s/n1));
+        data{cityIdx,24} = (max(0,960*upgradeReqMWCommercial*s/n1));
         end
-        data{stateIdx,25} = housingUnits*data{stateIdx,24};
+        data{cityIdx,25} = housingUnits*data{cityIdx,24};
         
         fprintf('State: %s, County: %s City: %s, \n', stateName, countyName, cityName);
         
