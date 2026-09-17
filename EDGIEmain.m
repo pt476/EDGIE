@@ -216,7 +216,6 @@ for stateIdx = 1:size(stateFolders, 1)
         % Replace spaces with underscores in the city name
         countyName = strrep(countyName, ' ','_');
         weatherfileName = fullfile(weatherFolder, sprintf('%s_amy2018.csv', countyName));
-        [thetaFull, ~] = importW(weatherfileName, weatherTime);
         
         % Check if the file exists before attempting to import weather data
         if exist(weatherfileName, 'file') == 2         
