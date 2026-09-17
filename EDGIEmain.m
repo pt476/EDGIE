@@ -118,7 +118,7 @@ individualPower = fillmissing(individualPower,'linear');
 %% State-level loop
 for stateIdx = 1:size(stateFolders, 1)
     stateAbbr = stateFolders{stateIdx, 1};
-    outputFolder = stateFolders{stateIdx, 2};
+    weatherFolder = stateFolders{stateIdx, 2};
     
     %% Filter current iteration city data from metaData
     currentStateData = metaData(strcmpi(metaData.state_id, stateAbbr), :);
@@ -160,66 +160,62 @@ for stateIdx = 1:size(stateFolders, 1)
     AttachedFloorArea(AttachedFloorArea>1700)=1700;
     AttachedFloorArea(AttachedFloorArea<450)=450;
     
+    % State-level program
     TodaysHeadroom = round(trirnd(1.15, 1.36, length(USAcountyName), 1), 2);
 
     desiredState = USAstateName(1,1);
     
     data = cell(length(USAcityName), 2);
-
+    
     %% City-level loop
     for cityIdx = 27 %1:min(3,length(USAcityName)) %1:length(USAcityName)
+        % Assign city data
+        PeakRatio = PeakRatio_comStock_resStock(cityIdx);
+        percentageAttached = AttachedHome(cityIdx);
+        percentageDetached = DetachedHome(cityIdx);
         cityName = USAcityName{cityIdx};
         stateName = USAstateName{cityIdx};
         countyName = USAcountyName{cityIdx};
+        lat = USAstatelat(cityIdx);
+        lng = USAstatelng(cityIdx);
+        %cooling temp
+        %heating temp
+        Uwall = UvalueWall(cityIdx);
+        Uwindow = UvalueWindow(cityIdx);
+        AreaAttached = ft2m2.*AttachedFloorArea(cityIdx);
+        AreaDetached = ft2m2.*DetachedFloorArea(cityIdx);
+        homeWithElectricWH = houseElecWH(cityIdx);
+        percentageSedans = sedans(cityIdx);
+        n2_0vehicle = zeroCarinHome(cityIdx);
+        n2_1vehicle = oneCarinHome(cityIdx);
+        n2_2vehicle = twoCarinHome(cityIdx);
+        n2_3vehicle = threeCarinHome(cityIdx);
+        EnergyCommercial = CommercialPrice(cityIdx)/100;
+        EnergyResidential = ResidentialPrice(cityIdx)/100;
+        houseHPdetached = currentStateData.HP_Detached(cityIdx);
+        houseAuxdetached = currentStateData.Aux_Detached(cityIdx);
+        houseHPattached = currentStateData.HP_Attached(cityIdx);
+        houseAuxattached = currentStateData.Aux_Attached(cityIdx);
+        units_per_building = unitsratio(cityIdx);
+        housingUnits = currentStateData.HousingUnits(cityIdx);
+        zone = currentStateData.Zone(cityIdx);
+        selectedHeadroom = TodaysHeadroom(cityIdx);
         
+        % Assign commute speed based on tri-distr.
         if oneWayCommuteTime(cityIdx) < 24
             commuteSpeed = trirnd(15,35,1,1);
         else
             commuteSpeed = trirnd(40,60,1,1);
         end
-        
+        % Calculate commute distance
         commuteDistance = (oneWayCommuteTime(cityIdx))*commuteSpeed/60;
         
-        lat = USAstatelat(cityIdx);
-        lng = USAstatelng(cityIdx);
-        Uwall = UvalueWall(cityIdx);
-        Uwindow = UvalueWindow(cityIdx);
-        
-        AreaAttached = ft2m2.*AttachedFloorArea(cityIdx);
-        AreaDetached = ft2m2.*DetachedFloorArea(cityIdx);
-        
+        % Calculate effective thermal resistance of homes
         [RvalueDetached,RvalueAttached,floorAreaDetached,floorAreaAttached] = Rcalc(Uwall,Uwindow,AreaDetached,AreaAttached,n1);
 
-        homeWithElectricWH = houseElecWH(cityIdx);
-        percentageSedans = sedans(cityIdx);
-        percentageAttached = AttachedHome(cityIdx);
-        percentageDetached = DetachedHome(cityIdx);
-        
-        n2_0vehicle = zeroCarinHome(cityIdx);
-        n2_1vehicle = oneCarinHome(cityIdx);
-        n2_2vehicle = twoCarinHome(cityIdx);
-        n2_3vehicle = threeCarinHome(cityIdx);
-        
-        units_per_building = unitsratio(cityIdx);
-        PeakRatio = PeakRatio_comStock_resStock(cityIdx);
-        
-        EnergyCommercial = CommercialPrice(cityIdx)/100;
-        EnergyResidential = ResidentialPrice(cityIdx)/100;
-        
-        selectedHeadroom = TodaysHeadroom(cityIdx);
-        
-        houseHPdetached = currentStateData.HP_Detached(cityIdx);
-        houseAuxdetached = currentStateData.Aux_Detached(cityIdx);
-        
-        houseHPattached = currentStateData.HP_Attached(cityIdx);
-        houseAuxattached = currentStateData.Aux_Attached(cityIdx);
-        housingUnits = currentStateData.HousingUnits(cityIdx);
-        zone = currentStateData.Zone(cityIdx);
-           
         % Replace spaces with underscores in the city name
         countyName = strrep(countyName, ' ','_');
-        weatherfileName = fullfile(outputFolder, sprintf('%s_amy2018.csv', countyName));
-        %weatherTime = (datetime(2018,1,1,1,0,0):hours(1):datetime(2019,1,1,0,0,0))';
+        weatherfileName = fullfile(weatherFolder, sprintf('%s_amy2018.csv', countyName));
         [thetaFull, ~] = importW(weatherfileName, weatherTime);
         
         % Check if the file exists before attempting to import weather data
@@ -236,14 +232,13 @@ for stateIdx = 1:size(stateFolders, 1)
             fprintf('File not found for %s\n', cityName);
             continue; % Skip to the next iteration
         end
-
+        
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        %%%%%%%%%%%%% download weather & basline load data %%%%%%%%%%%%%%%%%%%%%%%%
+        %%%%%%%%%%%%% download weather & baseline load data %%%%%%%%%%%%%%%%%%%%%%%%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
         % Import weather data
         [thetaFull, solarFull] = importW(weatherfileName, weatherTime);
-        %weatherTime = (datetime(2018,1,1,0,0,0):hours(1):datetime(2019,1,1,0,0,0))';
         idx2017weather = weatherTime < datetime(2018,1,1,0,0,0);
         
         % Extract template weather data (first N valid rows)
@@ -345,17 +340,17 @@ for stateIdx = 1:size(stateFolders, 1)
         %% Heat pump sizing
         for i=1:length(coolingtemp)
             designTempCool = coolingtemp(i,1);
-            check = 0; %identifier for soalr adjustments
+            check = 0; %identifier for solar adjustments
             [Hp_sizeCooling_detached]=Hp_coolingLoad(thetaFull,solarFull,fullPsummer,n1,mean(RvalueDetached),designTempCool,mean(floorAreaDetached),check);
-            check =1; %identifier for soalr adjustments
+            check =1; %identifier for solar adjustments
             [Hp_sizeCooling_attached]=Hp_coolingLoad(thetaFull,solarFull,fullPsummer,n1,mean(RvalueAttached),designTempCool,mean(floorAreaAttached),check);
         end
         
         for i=1:length(heatingtemp)
             designTempHeat = heatingtemp(i,1);
-            check = 0; %identifier for soalr adjustments
+            check = 0; %identifier for solar adjustments
             [Hp_sizeHeating_detached]=Hp_heatingLoad(thetaFull,solarFull,fullPwinter,n1,mean(RvalueDetached),designTempHeat,mean(floorAreaDetached),zone,check);
-            check = 1;%identifier for soalr adjustments
+            check = 1;%identifier for solar adjustments
             [Hp_sizeHeating_attached]=Hp_heatingLoad(thetaFull,solarFull,fullPwinter,n1,mean(RvalueAttached),designTempHeat,mean(floorAreaAttached),zone,check);
         end
         
