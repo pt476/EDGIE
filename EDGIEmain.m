@@ -8,12 +8,17 @@ baseDir = fullfile(currentDir, 'ComStock');
 
 addpath(functionsPath);
 addpath(inputFilesPath);
-%%
+
+commercial_data_dir_future   = fullfile(baseDir,'future_merged_results');
+commercial_data_dir_baseline = fullfile(baseDir,'baseline_merged_results');
+%% Define parameters
 tic
 batteryDeg =   1; % battery degradation with outside temperature is implemented
 waterheater = 3;  % set 1 for resitance 2 for heat pump only 3 for hybrid
 sizing = 3;       % set 1 for cooling 2 for heating 3 for max of heating or cooling 
-waterfile    = 'DHWEventGeneratorOutput.csv';                     % load water scheduler file
+
+data = readtable('metaData.xlsx');            % Read the CSV file
+waterfile    = 'DHWEventGeneratorOutput.csv'; % load water scheduler file
 rng(1)
 
 states = {
@@ -74,9 +79,8 @@ for i = 1:size(states,1)
     stateFolders{i,2} = fullfile(baseDir,'weather_data',states{i,2},filesep);
 end
 
-commercial_data_dir_future   = fullfile(baseDir,'future_merged_results');
-commercial_data_dir_baseline = fullfile(baseDir,'baseline_merged_results');
-
+                           
+%% State-level loop
 for idx = 1:size(stateFolders, 1)
     stateAbbr = stateFolders{idx, 1};
     outputFolder = stateFolders{idx, 2};
@@ -86,17 +90,16 @@ for idx = 1:size(stateFolders, 1)
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
     warmupDays=2;
     nDays =7+warmupDays;
-    ti = 0;                      % initial time, h
-    n1 = 1000;                   % number of homes (= number of HPs)
-    L = n1;                      % number of water heater
+    ti = 0;              % initial time, h
+    n1 = 1000;           % number of homes (= number of HPs)
+    L = n1;              % number of water heater
     ft2m2 = 0.092903;
-    tf = (nDays ) * 24;       % total hours
+    tf = (nDays ) * 24;  % total hours
     dt = 1;                      % time step, h
     K = tf / dt;         % number of time steps
-    t = (0:dt:tf)';        % time vector, hours
+    t = (0:dt:tf)';      % time vector, hours
     
-    % Read the CSV file
-    data = readtable('metaData.xlsx');
+    
     
     % Filter cities for state_id = 'AZ'
     stateAZ = data(strcmpi(data.state_id, stateAbbr), :);
@@ -170,6 +173,7 @@ for idx = 1:size(stateFolders, 1)
     individualPower{idx2017,:} = Datafilling;
     individualPower = fillmissing(individualPower,'linear');
     
+    %% City-level loop
     for stateIdx = 27 %1:length(arizonacities)
         cityName = arizonacities{stateIdx};
         stateName = USAstateName{stateIdx};
