@@ -83,8 +83,8 @@ states = {
 
 %% Read data
 
-metaData = readtable('metaData.xlsx');            % Read the CSV file
-waterfile    = 'DHWEventGeneratorOutput.csv'; % load water scheduler file
+metaData = readtable('metaData.xlsx');      % Read the CSV file
+waterfile = 'DHWEventGeneratorOutput.csv';  % load water scheduler file
 
 stateFolders = cell(size(states,1),2);
 for i = 1:size(states,1)
@@ -120,10 +120,11 @@ for stateIdx = 1:size(stateFolders, 1)
     stateAbbr = stateFolders{stateIdx, 1};
     weatherFolder = stateFolders{stateIdx, 2};
     
-    %% Filter current iteration city data from metaData
+    %% Get state data
+    % Filter current iteration state data from metaData
     currentStateData = metaData(strcmpi(metaData.state_id, stateAbbr), :);
     
-    %% Extract each data column for current city from metaData
+    % Extract each data column for current state from metaData
     PeakRatio_comStock_resStock = currentStateData.PeakRatio;
     AttachedHome = currentStateData.AttachedHome_;
     DetachedHome = currentStateData.DetachedHome_;
@@ -161,14 +162,15 @@ for stateIdx = 1:size(stateFolders, 1)
     AttachedFloorArea(AttachedFloorArea<450)=450;
     
     % State-level program
-    TodaysHeadroom = round(trirnd(1.15, 1.36, length(USAcountyName), 1), 2);
 
+    TodaysHeadroom = round(trirnd(1.15, 1.36, length(USAcountyName), 1), 2);
+    
     desiredState = USAstateName(1,1);
     
     data = cell(length(USAcityName), 2);
     
     %% City-level loop
-    for cityIdx = 27 %1:min(3,length(USAcityName)) %1:length(USAcityName)
+    for cityIdx = 1:min(3,length(USAcityName)) %1:length(USAcityName)
         % Assign city data
         PeakRatio = PeakRatio_comStock_resStock(cityIdx);
         percentageAttached = AttachedHome(cityIdx);
@@ -178,8 +180,6 @@ for stateIdx = 1:size(stateFolders, 1)
         countyName = USAcountyName{cityIdx};
         lat = USAstatelat(cityIdx);
         lng = USAstatelng(cityIdx);
-        %cooling temp
-        %heating temp
         Uwall = UvalueWall(cityIdx);
         Uwindow = UvalueWindow(cityIdx);
         AreaAttached = ft2m2.*AttachedFloorArea(cityIdx);
@@ -210,6 +210,8 @@ for stateIdx = 1:size(stateFolders, 1)
         % Calculate commute distance
         commuteDistance = (oneWayCommuteTime(cityIdx))*commuteSpeed/60;
         
+
+        %% Data pre-processing
         % Calculate effective thermal resistance of homes
         [RvalueDetached,RvalueAttached,floorAreaDetached,floorAreaAttached] = Rcalc(Uwall,Uwindow,AreaDetached,AreaAttached,n1);
 
@@ -229,30 +231,35 @@ for stateIdx = 1:size(stateFolders, 1)
         else
             % File doesn't exist, skip processing and move to the next city
             fprintf('File not found for %s\n', cityName);
-            continue; % Skip to the next iteration
+            %continue; % Skip to the next iteration
         end
         
-        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        %%%%%%%%%%%%% download weather & baseline load data %%%%%%%%%%%%%%%%%%%%%%%%
-        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+        %% Weather data cleaning
         % Import weather data
         [thetaFull, solarFull] = importW(weatherfileName, weatherTime);
+
+        % Build mask for padding rows (e.g. 2 warmupDays with 24 hours per day = 48 padding rows)
         idx2017weather = weatherTime < datetime(2018,1,1,0,0,0);
-        
-        % Extract template weather data (first N valid rows)
+
+        % Mask for template weather data (Identify the first N valid rows of weather data i.e. Jan1 00:00 to Jan2 23:00)
         DatafillingWeather = weatherTime >= datetime(2018,1,1,0,0,0) & ...
                   weatherTime <  datetime(2018,1,1,0,0,0)+warmupDays;   % 48 hours (or adjust)
         
+        % Paste the weather data across warmupDays
         thetaTemplate = thetaFull(DatafillingWeather);
         solarTemplate = solarFull(DatafillingWeather);
         
+        % Paste the warmupDays into the padding to remove % Nan values
         thetaFull(idx2017) = thetaTemplate;
         solarFull(idx2017) = solarTemplate;
+
+        % Remove any remaining NaN values
         thetaFull=fillmissing(thetaFull,'next') ;
         solarFull=fillmissing(solarFull,'next') ;
         
+        %% Pre-process data for representative design week
         % Reshape the data into a matrix with 365 rows (days) and 24 columns (hours)
+        % Drop the first warmupDays rows of data and last day to be a multiple of 24
         daily_temperature_matrix = reshape(thetaFull(warmupDays*24+1:end-1), 24, [])';
         
         % Calculate the number of full weeks in the data
@@ -264,37 +271,46 @@ for stateIdx = 1:size(stateFolders, 1)
         % Reshape the data into a matrix with 168 columns (24 hours/day * 7 days/week)
         weekly_temperature_matrix = reshape(weekly_temperature_matrix', 168, [])';
         
-        % Calculate the minimum and maximum temperature for each week
+        % Find the minimum and maximum temperature for each week
         weekely_min_temperature = min(weekly_temperature_matrix, [], 2);
         weekely_max_temperature = max(weekly_temperature_matrix, [], 2);
-        
-        data{cityIdx,8}=heatingtemp(cityIdx);
-        data{cityIdx,9}=coolingtemp(cityIdx);
         
         % Design temperature 
         design_temperatureWinter = f2c(heatingtemp(cityIdx)); 
         design_temperatureSummer = f2c(coolingtemp(cityIdx)); 
-
+        
+        %% Find representative design week
         % Find five days with daily minimum temperatures closest to the design temperature
+        % Rank every week of the year by how closely its coldest hour
+        % matches design temp
         [sortedTemp, sorted_indices] = sort(abs(weekely_min_temperature - design_temperatureWinter));
+        % Keep the best 7 weeks (redundant computation, only the
+        % best week is used)
         selected_days_indices = sorted_indices(1:7);
         selected_days_temperatures = weekely_min_temperature(selected_days_indices,:);
         
+        % Same as above but for summer
         [sortedTempCooling, sorted_indicesCooling] = sort(abs(weekely_max_temperature - design_temperatureSummer));
         selected_days_indicesCooling = sorted_indicesCooling(1:7);
         selected_days_temperaturesCooling = weekely_max_temperature(selected_days_indicesCooling,:);
         
+        %% Convert representative week into simulation window
+        % Convert best week index back to calendar dates
         tStartWinter = datetime(2018,1,1,0,0,0) + days((selected_days_indices(1)-1)*7)-warmupDays;
         tStartSummer = datetime(2018,1,1,0,0,0) + days((selected_days_indicesCooling(1)-1)*7)-warmupDays;
         
+        % Define end duration of simulation window
         tEndWinter = tStartWinter + hours(tf); 
         tEndSummer = tStartSummer + hours(tf); 
         
+        % Define winter window (redundant, unused in script)
         ttWinter = (tStartWinter:hours(dt):tEndWinter)';
+        ttSummer= (tStartSummer:hours(dt):tEndSummer)';
+
+        % Get temp/shortwave from the best week
         thetaWinter = thetaFull(weatherTime>=tStartWinter & weatherTime<tEndWinter);
         solarWinter = solarFull(weatherTime>=tStartWinter & weatherTime<tEndWinter);
         
-        ttSummer= (tStartSummer:hours(dt):tEndSummer)';
         thetaSummer = thetaFull(weatherTime>=tStartSummer & weatherTime<tEndSummer);
         solarSummer = solarFull(weatherTime>=tStartSummer & weatherTime<tEndSummer);
         
@@ -549,7 +565,7 @@ for stateIdx = 1:size(stateFolders, 1)
         data{cityIdx, 12}=quantile(Psummer/s + HPWHloadSummer/s + sum(phBaseSummer,2)/s + HPloadSummer/s,0.99);
         
         data{cityIdx, 13}=-data{cityIdx, 12}+data{cityIdx, 11};
-        data{cityIdx,14} = selectedHeadroom*data{cityIdx, 10} - FutureHeadroom*max(data{cityIdx, 11},data{cityIdx, 12});
+        data{cityIdx, 14} = selectedHeadroom*data{cityIdx, 10} - FutureHeadroom*max(data{cityIdx, 11},data{cityIdx, 12});
         
         %%  
         resModelPeakWinter = quantile(Pwinter + HPWHloadWinter + sum(phBaseWinter,2) + HPloadWinter,0.99); 
@@ -611,6 +627,8 @@ for stateIdx = 1:size(stateFolders, 1)
         end
 
         %%
+        data{cityIdx,8}=heatingtemp(cityIdx);
+        data{cityIdx,9}=coolingtemp(cityIdx);
         data{cityIdx,16} = zone;
         data{cityIdx,17} = housingUnits*data{cityIdx,15};
         data{cityIdx,18}= housingUnits;
