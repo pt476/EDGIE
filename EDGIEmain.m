@@ -31,7 +31,7 @@ rng(1)
 
 states = {
  'MN','Minnesota'
- 'DC','District_of_Columbia'
+% 'DC','District_of_Columbia'
 %  'AZ','Arizona'
 %  'AL','Alabama'
 %  'WI','Wisconsin'
@@ -152,7 +152,7 @@ for stateIdx = 1:size(stateFolders, 1)
    
     %% Clean floor area data
     % Replace NaN values with 0
-    DetachedFloorArea(isnan(DetachedFloorArea))=0;
+    DetachedFloorArea(isnantodaysheadroom(DetachedFloorArea))=0;
     AttachedFloorArea(isnan(AttachedFloorArea))=0;
     % Cap detached floor area to [1000,3000] sqft
     DetachedFloorArea(DetachedFloorArea>3000)=3000; 
@@ -234,85 +234,13 @@ for stateIdx = 1:size(stateFolders, 1)
             %continue; % Skip to the next iteration
         end
         
-        %% Weather data cleaning
-        % Import weather data
-        [thetaFull, solarFull] = importW(weatherfileName, weatherTime);
-
-        % Build mask for padding rows (e.g. 2 warmupDays with 24 hours per day = 48 padding rows)
-        idx2017weather = weatherTime < datetime(2018,1,1,0,0,0);
-
-        % Mask for template weather data (Identify the first N valid rows of weather data i.e. Jan1 00:00 to Jan2 23:00)
-        DatafillingWeather = weatherTime >= datetime(2018,1,1,0,0,0) & ...
-                  weatherTime <  datetime(2018,1,1,0,0,0)+warmupDays;   % 48 hours (or adjust)
+        %% Weather data processing
+        [thetaFull, solarFull, thetaWinter, solarWinter, thetaSummer, solarSummer, ...
+    tStartWinter, tEndWinter, tStartSummer, tEndSummer] = ...
+    getDesignWeekWeather(weatherfileName, weatherTime, warmupDays, ...
+                          heatingtemp(cityIdx), coolingtemp(cityIdx), tf);
         
-        % Paste the weather data across warmupDays
-        thetaTemplate = thetaFull(DatafillingWeather);
-        solarTemplate = solarFull(DatafillingWeather);
-        
-        % Paste the warmupDays into the padding to remove % Nan values
-        thetaFull(idx2017) = thetaTemplate;
-        solarFull(idx2017) = solarTemplate;
-
-        % Remove any remaining NaN values
-        thetaFull=fillmissing(thetaFull,'next') ;
-        solarFull=fillmissing(solarFull,'next') ;
-        
-        %% Pre-process data for representative design week
-        % Reshape the data into a matrix with 365 rows (days) and 24 columns (hours)
-        % Drop the first warmupDays rows of data and last day to be a multiple of 24
-        daily_temperature_matrix = reshape(thetaFull(warmupDays*24+1:end-1), 24, [])';
-        
-        % Calculate the number of full weeks in the data
-        num_full_weeks = floor(size(daily_temperature_matrix, 1) / 7);
-        
-        % Trim the data to keep only full weeks
-        weekly_temperature_matrix = daily_temperature_matrix(1:num_full_weeks * 7, :);
-        
-        % Reshape the data into a matrix with 168 columns (24 hours/day * 7 days/week)
-        weekly_temperature_matrix = reshape(weekly_temperature_matrix', 168, [])';
-        
-        % Find the minimum and maximum temperature for each week
-        weekely_min_temperature = min(weekly_temperature_matrix, [], 2);
-        weekely_max_temperature = max(weekly_temperature_matrix, [], 2);
-        
-        % Design temperature 
-        design_temperatureWinter = f2c(heatingtemp(cityIdx)); 
-        design_temperatureSummer = f2c(coolingtemp(cityIdx)); 
-        
-        %% Find representative design week
-        % Find five days with daily minimum temperatures closest to the design temperature
-        % Rank every week of the year by how closely its coldest hour
-        % matches design temp
-        [sortedTemp, sorted_indices] = sort(abs(weekely_min_temperature - design_temperatureWinter));
-        % Keep the best 7 weeks (redundant computation, only the
-        % best week is used)
-        selected_days_indices = sorted_indices(1:7);
-        selected_days_temperatures = weekely_min_temperature(selected_days_indices,:);
-        
-        % Same as above but for summer
-        [sortedTempCooling, sorted_indicesCooling] = sort(abs(weekely_max_temperature - design_temperatureSummer));
-        selected_days_indicesCooling = sorted_indicesCooling(1:7);
-        selected_days_temperaturesCooling = weekely_max_temperature(selected_days_indicesCooling,:);
-        
-        %% Convert representative week into simulation window
-        % Convert best week index back to calendar dates
-        tStartWinter = datetime(2018,1,1,0,0,0) + days((selected_days_indices(1)-1)*7)-warmupDays;
-        tStartSummer = datetime(2018,1,1,0,0,0) + days((selected_days_indicesCooling(1)-1)*7)-warmupDays;
-        
-        % Define end duration of simulation window
-        tEndWinter = tStartWinter + hours(tf); 
-        tEndSummer = tStartSummer + hours(tf); 
-        
-        % Define winter window (redundant, unused in script)
-        ttWinter = (tStartWinter:hours(dt):tEndWinter)';
-        ttSummer= (tStartSummer:hours(dt):tEndSummer)';
-
-        % Get temp/shortwave from the best week
-        thetaWinter = thetaFull(weatherTime>=tStartWinter & weatherTime<tEndWinter);
-        solarWinter = solarFull(weatherTime>=tStartWinter & weatherTime<tEndWinter);
-        
-        thetaSummer = thetaFull(weatherTime>=tStartSummer & weatherTime<tEndSummer);
-        solarSummer = solarFull(weatherTime>=tStartSummer & weatherTime<tEndSummer);
+      
         
         %% import 'no electrification' load profile
         [Pwinter,fullPwinter,PdetachedWinter,PattachedWinter] = importBaselineElectricity(individualPower,tStartWinter,tEndWinter,weatherTime,n1,desiredState,percentageAttached,percentageDetached);
